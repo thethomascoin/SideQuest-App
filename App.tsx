@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Quest, UserProfile, PlayerClass, ViewState, VerificationResult, LootItem, SocialPost, Achievement, LeaderboardEntry, LoreEntry, LoreCategory, DopamineCategory } from './types';
 import { generateDailyQuests, verifyQuestSubmission, generateOracleQuest, generateSocialFeed, generateLeaderboard, generateWorldEvent, generateLoreEntry, generateDailyNarrative } from './services/geminiService';
+import { authService } from './services/authService';
 import { playSound } from './services/audioService';
 import { QuestCard } from './components/QuestCard';
 import { QuestMap } from './components/QuestMap';
@@ -10,6 +11,9 @@ import { NPCDialog } from './components/NPCDialog';
 import { AchievementsList } from './components/AchievementsList';
 import { LoreLibrary } from './components/LoreLibrary';
 import { Button } from './components/Button';
+import { AuthScreen } from './components/AuthScreen';
+import { Onboarding } from './components/Onboarding';
+import { SettingsView } from './components/SettingsView';
 
 // --- Game Data Constants ---
 
@@ -20,8 +24,6 @@ const GAME_ACHIEVEMENTS: Achievement[] = [
     { id: 'jacked', title: 'Gym Rat', description: 'Reach 20 Strength.', icon: '💪', unlocked: false, condition: (u) => u.attributes.strength >= 20 },
     { id: 'bardic', title: 'Social Butterfly', description: 'Reach 20 Charisma.', icon: '🗣️', unlocked: false, condition: (u) => u.attributes.charisma >= 20 },
 ];
-
-const AVATAR_COLORS = ['bg-indigo-600', 'bg-red-600', 'bg-green-600', 'bg-yellow-600', 'bg-purple-600', 'bg-pink-600', 'bg-zinc-600', 'bg-cyan-600'];
 
 // --- Helper Components ---
 
@@ -69,10 +71,13 @@ const LootCard: React.FC<{ item: LootItem }> = ({ item }) => {
 }
 
 export default function App() {
-  // --- State ---
+  // --- App Flow State ---
+  const [appState, setAppState] = useState<'auth' | 'onboarding' | 'game' | 'loading'>('loading');
+  const [user, setUser] = useState<UserProfile | null>(null);
+
+  // --- Game State ---
   const [view, setView] = useState<ViewState>('dashboard');
   const [viewMode, setViewMode] = useState<'list' | 'map' | 'menu'>('list'); 
-  const [loading, setLoading] = useState(true);
   const [quests, setQuests] = useState<Quest[]>([]);
   const [activeQuest, setActiveQuest] = useState<Quest | null>(null);
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
@@ -98,79 +103,66 @@ export default function App() {
   // Daily Bonus State
   const [showDailyBonus, setShowDailyBonus] = useState(false);
 
-  // Customization State
-  const [isCustomizing, setIsCustomizing] = useState(false);
-  const [tempAvatar, setTempAvatar] = useState("👤");
-  const [tempColor, setTempColor] = useState("bg-indigo-600");
-
-  const [user, setUser] = useState<UserProfile>({
-    id: 'user-1',
-    name: 'Player One',
-    avatar: '🧙‍♂️',
-    avatarColor: 'bg-indigo-600',
-    title: 'Apprentice',
-    level: 1,
-    currentXP: 0,
-    nextLevelXP: 500,
-    playerClass: PlayerClass.ROGUE,
-    streak: 1,
-    lastLogin: new Date().toISOString(),
-    completedQuests: 0,
-    attributes: { strength: 10, intellect: 10, charisma: 10 },
-    inventory: [],
-    achievements: [],
-    abilityCooldown: null,
-    loreUnlocked: [], // Init empty
-    dailyNarrative: '',
-  });
-
   // Timers ref
   const eventTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const questTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // --- Initialization & Daily Bonus Logic ---
+  // --- Initialization Logic ---
   useEffect(() => {
-    const initGame = async () => {
-      try {
-        const savedUser = localStorage.getItem('sidequest_user');
-        let currentUser = user;
-
-        if (savedUser) {
-            currentUser = JSON.parse(savedUser);
-            // Backwards compatibility for lore
-            if (!currentUser.loreUnlocked) currentUser.loreUnlocked = [];
-
-            const lastLoginDate = new Date(currentUser.lastLogin).toDateString();
-            const today = new Date().toDateString();
-            if (lastLoginDate !== today) {
-                setShowDailyBonus(true);
-                currentUser.streak += 1;
-                currentUser.lastLogin = new Date().toISOString();
-                // Reset daily narrative on new day
-                currentUser.dailyNarrative = ''; 
-                localStorage.setItem('sidequest_user', JSON.stringify(currentUser));
-                playSound('open');
-            }
+    const initSession = () => {
+        const currentUser = authService.getSession();
+        if (currentUser) {
             setUser(currentUser);
+            if (currentUser.hasOnboarded) {
+                setAppState('game');
+                loadGameData(currentUser);
+            } else {
+                setAppState('onboarding');
+            }
         } else {
-            localStorage.setItem('sidequest_user', JSON.stringify(user));
+            setAppState('auth');
         }
+    };
+    initSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const loadGameData = async (currentUser: UserProfile) => {
+    try {
+        // Backwards compatibility for lore
+        if (!currentUser.loreUnlocked) currentUser.loreUnlocked = [];
+
+        const lastLoginDate = new Date(currentUser.lastLogin).toDateString();
+        const today = new Date().toDateString();
+        let updatedUser = { ...currentUser };
+
+        if (lastLoginDate !== today) {
+            setShowDailyBonus(true);
+            updatedUser.streak += 1;
+            updatedUser.lastLogin = new Date().toISOString();
+            updatedUser.dailyNarrative = ''; 
+            
+            // Update in DB
+            authService.updateUser(updatedUser);
+            playSound('open');
+        }
+        setUser(updatedUser);
 
         // Fetch Data
         const [dailyQuests, aiPosts, aiLeaderboard] = await Promise.all([
-             generateDailyQuests(currentUser.playerClass),
+             generateDailyQuests(updatedUser),
              generateSocialFeed(),
-             generateLeaderboard(currentUser.level)
+             generateLeaderboard(updatedUser.level)
         ]);
 
         // Merge user into leaderboard for display
         const userEntry: LeaderboardEntry = {
-            id: currentUser.id,
-            name: currentUser.name,
-            avatar: currentUser.avatar,
-            level: currentUser.level,
-            xp: currentUser.currentXP,
-            title: currentUser.title,
+            id: updatedUser.id,
+            name: updatedUser.name,
+            avatar: updatedUser.avatar,
+            level: updatedUser.level,
+            xp: updatedUser.currentXP,
+            title: updatedUser.title,
             isUser: true
         };
         const fullLeaderboard = [...aiLeaderboard, userEntry].sort((a, b) => b.xp - a.xp);
@@ -180,19 +172,46 @@ export default function App() {
         setLeaderboard(fullLeaderboard);
 
         // Generate narrative if missing
-        if (!currentUser.dailyNarrative) {
-             generateDailyNarrative(currentUser, dailyQuests).then(narrative => {
-                 setUser(prev => ({ ...prev, dailyNarrative: narrative }));
+        if (!updatedUser.dailyNarrative) {
+             generateDailyNarrative(updatedUser, dailyQuests).then(narrative => {
+                 setUser(prev => prev ? ({ ...prev, dailyNarrative: narrative }) : null);
              });
         }
 
-      } catch (e) {
-        console.error("Failed to init game", e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    initGame();
+    } catch (e) {
+      console.error("Failed to init game", e);
+    }
+  };
+
+  // --- Auth Handlers ---
+  const handleAuthSuccess = (loggedInUser: UserProfile) => {
+    setUser(loggedInUser);
+    if (loggedInUser.hasOnboarded) {
+      setAppState('game');
+      loadGameData(loggedInUser);
+    } else {
+      setAppState('onboarding');
+    }
+  };
+
+  const handleOnboardingComplete = (onboardedUser: UserProfile) => {
+    setUser(onboardedUser);
+    setAppState('game');
+    loadGameData(onboardedUser);
+  };
+  
+  const handleLogout = () => {
+    authService.logout();
+    setUser(null);
+    setAppState('auth');
+    setQuests([]);
+    setView('dashboard');
+  };
+
+
+  // --- Event Timers ---
+  useEffect(() => {
+    if (appState !== 'game') return;
 
     // Start World Event Timer (Chance to spawn every 3 minutes)
     eventTimerRef.current = setInterval(async () => {
@@ -214,11 +233,11 @@ export default function App() {
     return () => {
         if (eventTimerRef.current) clearInterval(eventTimerRef.current);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); 
+  }, [appState]);
 
   // Cleanup expired events
   useEffect(() => {
+      if (appState !== 'game') return;
       const interval = setInterval(() => {
           setQuests(prev => prev.filter(q => {
               if (q.expiresAt && Date.now() > q.expiresAt && !q.completed && q.type === 'world-event') {
@@ -228,7 +247,7 @@ export default function App() {
           }));
       }, 30000);
       return () => clearInterval(interval);
-  }, []);
+  }, [appState]);
 
   // Timer logic for active Timed Quests
   useEffect(() => {
@@ -259,7 +278,7 @@ export default function App() {
 
   // Persist User State & Check Achievements
   useEffect(() => {
-      if (!loading) {
+      if (appState === 'game' && user) {
         // Check achievements
         const newUnlocks: string[] = [];
         GAME_ACHIEVEMENTS.forEach(ach => {
@@ -270,9 +289,12 @@ export default function App() {
         });
 
         if (newUnlocks.length > 0) {
-            setUser(prev => ({...prev, achievements: [...prev.achievements, ...newUnlocks]}));
+            const updatedUser = {...user, achievements: [...user.achievements, ...newUnlocks]};
+            setUser(updatedUser);
+            authService.updateUser(updatedUser);
         } else {
-            localStorage.setItem('sidequest_user', JSON.stringify(user));
+            // Regular save
+            authService.updateUser(user);
         }
 
         // Update Leaderboard entry for user
@@ -280,7 +302,7 @@ export default function App() {
             entry.isUser ? { ...entry, xp: user.currentXP, level: user.level, title: user.title } : entry
         ).sort((a, b) => b.xp - a.xp));
       }
-  }, [user, loading]);
+  }, [user, appState]);
 
   // --- Handlers ---
   const handleAcceptQuest = (quest: Quest) => {
@@ -323,10 +345,10 @@ export default function App() {
       playSound('click');
       try {
           const newEntry = await generateLoreEntry(category);
-          setUser(prev => ({
+          setUser(prev => prev ? ({
               ...prev,
               loreUnlocked: [newEntry, ...(prev.loreUnlocked || [])]
-          }));
+          }) : null);
           playSound('success');
       } catch (e) {
           console.error("Lore failed", e);
@@ -348,7 +370,7 @@ export default function App() {
   };
 
   const handleVerify = async () => {
-    if (!activeQuest || !capturedImage) return;
+    if (!activeQuest || !capturedImage || !user) return;
     
     // Clear any timers
     if(questTimerRef.current) clearInterval(questTimerRef.current);
@@ -394,7 +416,7 @@ export default function App() {
           });
       }
 
-      setUser(prev => ({
+      setUser(prev => prev ? ({
         ...prev,
         currentXP: newXP,
         level: newLevel,
@@ -402,7 +424,7 @@ export default function App() {
         completedQuests: prev.completedQuests + 1,
         attributes: newAttrs,
         inventory: newInventory
-      }));
+      }) : null);
 
       const newPost: SocialPost = {
           id: `post-${Date.now()}`,
@@ -424,21 +446,23 @@ export default function App() {
   };
 
   const handleClaimBonus = () => {
-      setUser(prev => ({
+      setUser(prev => prev ? ({
           ...prev,
           currentXP: prev.currentXP + 50
-      }));
+      }) : null);
       setShowDailyBonus(false);
       playSound('success');
   };
 
-  const handleSaveProfile = () => {
-      setUser(prev => ({...prev, avatar: tempAvatar, avatarColor: tempColor}));
-      setIsCustomizing(false);
-      playSound('click');
+  const handleSaveSettings = (updatedUser: UserProfile) => {
+      setUser(updatedUser);
+      authService.updateUser(updatedUser);
+      playSound('success');
+      setView('dashboard'); // Or back to wherever
   };
 
   const handleClassAbility = () => {
+      if (!user) return;
       // Logic: Reroll Quests
       const cooldownTime = 3600 * 1000; // 1 hour
       if (user.abilityCooldown && Date.now() < user.abilityCooldown) {
@@ -446,15 +470,13 @@ export default function App() {
           return;
       }
 
-      setLoading(true);
-      generateDailyQuests(user.playerClass).then(newQuests => {
+      generateDailyQuests(user).then(newQuests => {
           setQuests(newQuests);
-          setUser(prev => ({...prev, abilityCooldown: Date.now() + cooldownTime }));
+          setUser(prev => prev ? ({...prev, abilityCooldown: Date.now() + cooldownTime }) : null);
           playSound('success');
-          setLoading(false);
           // Regenerate narrative
           generateDailyNarrative(user, newQuests).then(narrative => {
-               setUser(prev => ({ ...prev, dailyNarrative: narrative }));
+               setUser(prev => prev ? ({ ...prev, dailyNarrative: narrative }) : null);
           });
       });
   };
@@ -503,9 +525,20 @@ export default function App() {
       );
   };
 
-  // --- Render ---
+  // --- Top Level Renders ---
 
-  if (loading) return <LoadingScreen />;
+  if (appState === 'loading') return <LoadingScreen />;
+
+  if (appState === 'auth') {
+    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
+  }
+
+  if (appState === 'onboarding' && user) {
+    return <Onboarding user={user} onComplete={handleOnboardingComplete} />;
+  }
+  
+  // Guard for Game State
+  if (!user) return <LoadingScreen />;
 
   return (
     <div className="min-h-screen bg-surface-900 text-zinc-100 font-sans selection:bg-neon-pink selection:text-white pb-24 overflow-x-hidden">
@@ -546,54 +579,11 @@ export default function App() {
           </div>
       )}
 
-      {/* Customization Modal */}
-      {isCustomizing && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
-              <div className="bg-surface-800 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm">
-                  <h3 className="text-xl font-bold mb-4">Customize Profile</h3>
-                  <div className="flex justify-center mb-6">
-                      <div className={`w-24 h-24 ${tempColor} rounded-full flex items-center justify-center text-5xl border-2 border-white shadow-xl transition-colors`}>
-                          {tempAvatar}
-                      </div>
-                  </div>
-                  
-                  <p className="text-xs font-bold text-zinc-500 uppercase mb-2">Avatar</p>
-                  <div className="grid grid-cols-5 gap-2 mb-4">
-                      {['🧙‍♂️','🥷','🧚‍♀️','🧛','🧟','🦸','🦹','🕵️','🧑‍🚀','🤖'].map(emoji => (
-                          <button 
-                            key={emoji} 
-                            onClick={() => { setTempAvatar(emoji); playSound('click'); }}
-                            className={`text-2xl p-2 rounded hover:bg-surface-700 ${tempAvatar === emoji ? 'bg-surface-600 ring-2 ring-white' : ''}`}
-                          >
-                              {emoji}
-                          </button>
-                      ))}
-                  </div>
-
-                  <p className="text-xs font-bold text-zinc-500 uppercase mb-2">Background</p>
-                  <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
-                      {AVATAR_COLORS.map(color => (
-                          <button
-                            key={color}
-                            onClick={() => { setTempColor(color); playSound('click'); }}
-                            className={`w-8 h-8 rounded-full ${color} border-2 ${tempColor === color ? 'border-white scale-110' : 'border-transparent'}`}
-                          />
-                      ))}
-                  </div>
-
-                  <div className="flex gap-3">
-                      <Button variant="ghost" onClick={() => setIsCustomizing(false)} fullWidth>Cancel</Button>
-                      <Button onClick={handleSaveProfile} fullWidth>Save</Button>
-                  </div>
-              </div>
-          </div>
-      )}
-
       {/* Header */}
       <header className="sticky top-0 z-40 bg-surface-900/95 backdrop-blur border-b border-zinc-800 p-4 shadow-xl">
         <div className="flex justify-between items-center mb-2">
-          <div className="flex items-center gap-3" onClick={() => { setIsCustomizing(true); playSound('click'); }}>
-            <div className={`w-10 h-10 ${user.avatarColor || 'bg-indigo-600'} rounded-lg flex items-center justify-center font-bold text-2xl shadow-[0_0_10px_rgba(188,19,254,0.5)] cursor-pointer border border-white/20`}>
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => { setView('settings'); playSound('click'); }}>
+            <div className={`w-10 h-10 ${user.avatarColor || 'bg-indigo-600'} rounded-lg flex items-center justify-center font-bold text-2xl shadow-[0_0_10px_rgba(188,19,254,0.5)] border border-white/20 transition-transform hover:scale-105`}>
               {user.avatar}
             </div>
             <div className="flex flex-col">
@@ -708,6 +698,16 @@ export default function App() {
                 loading={loreLoading} 
             />
         )}
+        
+        {/* SETTINGS VIEW */}
+        {view === 'settings' && (
+            <SettingsView 
+                user={user} 
+                onSave={handleSaveSettings} 
+                onBack={() => setView('dashboard')} 
+                onLogout={handleLogout} 
+            />
+        )}
 
         {/* ORACLE VIEW */}
         {view === 'oracle' && (
@@ -814,14 +814,31 @@ export default function App() {
                 <div className="text-5xl font-mono font-bold text-yellow-400 mb-2 drop-shadow-lg">+{verificationResult.xpAwarded} XP</div>
                 
                 {/* Confidence & Sentiment Badges */}
-                <div className="flex gap-2 mb-6 justify-center">
+                <div className="flex flex-wrap gap-2 mb-6 justify-center">
                     <span className="bg-surface-800 px-3 py-1 rounded-full text-xs font-bold text-zinc-400 border border-zinc-700">
-                        👁️ Match: <span className="text-white">{verificationResult.confidenceScore}%</span>
+                        👁️ Confidence: <span className="text-white">{verificationResult.confidenceScore}%</span>
                     </span>
                     <span className="bg-surface-800 px-3 py-1 rounded-full text-xs font-bold text-zinc-400 border border-zinc-700">
                         🎭 Mood: <span className="text-white">{verificationResult.sentiment}</span>
                     </span>
+                    {verificationResult.creativityScore !== undefined && (
+                        <span className="bg-surface-800 px-3 py-1 rounded-full text-xs font-bold text-zinc-400 border border-zinc-700">
+                            🎨 Creativity: <span className="text-white">{verificationResult.creativityScore}%</span>
+                        </span>
+                    )}
                 </div>
+
+                {/* Detected Objects */}
+                {verificationResult.detectedObjects && verificationResult.detectedObjects.length > 0 && (
+                     <div className="mb-4 text-center">
+                         <p className="text-[10px] uppercase text-zinc-500 font-bold mb-1">AI Identified</p>
+                         <div className="flex flex-wrap justify-center gap-1">
+                             {verificationResult.detectedObjects.map((obj, i) => (
+                                 <span key={i} className="text-xs bg-zinc-800/50 text-zinc-300 px-2 py-0.5 rounded border border-zinc-700">{obj}</span>
+                             ))}
+                         </div>
+                     </div>
+                )}
 
                 {verificationResult.loot && (
                     <div className="w-full max-w-xs mb-6 animate-in slide-in-from-bottom-5 duration-700 delay-150">
@@ -847,6 +864,18 @@ export default function App() {
                      <p className="text-red-400 text-xs font-bold uppercase tracking-wider">Confidence Score: {verificationResult.confidenceScore}%</p>
                  </div>
 
+                 {/* Detected Objects even on fail to show why */}
+                 {verificationResult.detectedObjects && verificationResult.detectedObjects.length > 0 && (
+                     <div className="mb-4 text-center">
+                         <p className="text-[10px] uppercase text-zinc-500 font-bold mb-1">AI Saw</p>
+                         <div className="flex flex-wrap justify-center gap-1">
+                             {verificationResult.detectedObjects.map((obj, i) => (
+                                 <span key={i} className="text-xs bg-zinc-800/50 text-zinc-300 px-2 py-0.5 rounded border border-zinc-700">{obj}</span>
+                             ))}
+                         </div>
+                     </div>
+                )}
+
                  <p className="text-zinc-300 mb-8 max-w-xs bg-surface-800 p-4 rounded-lg border border-zinc-700">
                     "{verificationResult.aiComment}"
                  </p>
@@ -861,7 +890,7 @@ export default function App() {
              <div className="animate-in fade-in duration-500">
                 <div className="flex justify-between items-center mb-6">
                     <h2 className="text-3xl font-black italic uppercase text-transparent bg-clip-text bg-gradient-to-r from-neon-blue to-neon-purple">The Grimoire</h2>
-                    <button onClick={() => { setIsCustomizing(true); playSound('click'); }} className="text-xs bg-surface-800 border border-zinc-700 px-2 py-1 rounded text-zinc-300 hover:text-white">Edit Profile</button>
+                    <button onClick={() => { setView('settings'); playSound('click'); }} className="text-xs bg-surface-800 border border-zinc-700 px-2 py-1 rounded text-zinc-300 hover:text-white">Edit Profile</button>
                 </div>
 
                 <div className="bg-surface-800 p-4 rounded-xl mb-6 border border-zinc-700">
@@ -917,7 +946,7 @@ export default function App() {
           <span className="text-xl">📜</span>
           <span className="text-[10px] uppercase font-bold mt-1">Lore</span>
         </button>
-        <button onClick={() => { setView('inventory'); playSound('click'); }} className={`flex flex-col items-center ${view === 'inventory' || view === 'achievements' ? 'text-neon-purple' : 'text-zinc-500'}`}>
+        <button onClick={() => { setView('inventory'); playSound('click'); }} className={`flex flex-col items-center ${view === 'inventory' || view === 'achievements' || view === 'settings' ? 'text-neon-purple' : 'text-zinc-500'}`}>
           <span className="text-xl">🎒</span>
           <span className="text-[10px] uppercase font-bold mt-1">Grimoire</span>
         </button>

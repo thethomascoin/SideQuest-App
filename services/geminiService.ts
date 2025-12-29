@@ -16,7 +16,7 @@ const cleanJSON = (text: string): string => {
 
 // --- QUESTS ---
 
-export const generateDailyQuests = async (playerClass: PlayerClass): Promise<Quest[]> => {
+export const generateDailyQuests = async (user: UserProfile): Promise<Quest[]> => {
   const questSchema = {
     type: Type.ARRAY,
     items: {
@@ -39,25 +39,23 @@ export const generateDailyQuests = async (playerClass: PlayerClass): Promise<Que
   const timeOfDay = hour < 12 ? "Morning" : hour < 18 ? "Afternoon" : "Evening";
 
   const prompt = `
-    Generate 4 real-life RPG quests for a player with the class: ${playerClass}.
+    Generate 4 real-life RPG quests for a player.
+    Player Class: ${user.playerClass}
     Context: It is currently ${timeOfDay}.
+    User's Reward Preference: ${user.dopaminePreference || 'General'}.
 
     1. Easy Quest (Solo task, quick, low anxiety).
     2. Medium Quest (Creative task).
     3. Hard Quest (Social task).
     4. Special Quest: Randomly choose between "timed", "exploration", OR "collection".
-       - If "timed": A high-energy, simple task that MUST be done fast (e.g., "Find a spoon in 60 seconds", "Do 20 jumping jacks"). Set 'durationMinutes' to 1 or 2.
-       - If "exploration": A task requiring the user to go to a specific TYPE of place (e.g., "Find a coffee shop", "Locate a fire hydrant"). Set 'locationHint'.
-       - If "collection": A scavenger hunt task to find multiple related items (e.g., "Find 3 different types of leaves", "Gather 5 red objects", "Collect 3 receipts").
-
-    The quests must be physical real-world actions.
-    Do not require purchases.
+    
+    The quests must be physical real-world actions. Do not require purchases.
     
     Assign a 'dopamineCategory' to each:
-    - Appetizer: Quick, low friction (e.g. drink water).
+    - Appetizer: Quick, low friction.
     - Main: The challenging, meaningful task.
     - Side: Necessary maintenance/chores.
-    - Dessert: Fun, social, or creative treat.
+    - Dessert: Fun, social, or creative treat. (Tailor this specifically to the user's reward preference: ${user.dopaminePreference}).
     
     Return JSON.
   `;
@@ -111,7 +109,9 @@ export const generateDailyNarrative = async (user: UserProfile, quests: Quest[])
 
         Write a short, cinematic "Main Character" opening narration (max 60 words) setting the scene for their day. 
         Frame the mundane tasks as epic hero's work. Use "You" perspective.
-        Style: Mysterious, empowering, slightly cyberpunk.
+        
+        NARRATIVE STYLE: ${user.narrativeMode || 'Cyberpunk'}.
+        (e.g., if Cyberpunk, use tech/neon terms. If Fantasy, use magic/prophecy. If Solarpunk, use nature/harmony).
     `;
 
     try {
@@ -337,15 +337,17 @@ export const verifyQuestSubmission = async (
     type: Type.OBJECT,
     properties: {
       success: { type: Type.BOOLEAN },
-      confidence_score: { type: Type.INTEGER, description: "0-100 visual match score" },
-      sentiment: { type: Type.STRING, description: "One word emotion: e.g. Triumphant, Tired, Bored, Excited" },
-      xp_awarded: { type: Type.INTEGER },
-      ai_comment: { type: Type.STRING },
+      confidence_score: { type: Type.INTEGER, description: "0-100 score. Does the image definitively prove the quest was completed?" },
+      creativity_score: { type: Type.INTEGER, description: "0-100 score. How creative or high-effort is the submission?" },
+      sentiment: { type: Type.STRING, description: "One word emotion: e.g. Triumphant, Tired, Bored, Excited, Lazy, Heroic" },
+      xp_awarded: { type: Type.INTEGER, description: "Base XP + bonuses for creativity/effort." },
+      ai_comment: { type: Type.STRING, description: "The DM's response." },
       loot_name: { type: Type.STRING },
       loot_description: { type: Type.STRING },
       loot_rarity: { type: Type.STRING, enum: ["Common", "Rare", "Epic", "Legendary"] },
+      detected_objects: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of key objects identified in the image." }
     },
-    required: ["success", "confidence_score", "sentiment", "xp_awarded", "ai_comment"],
+    required: ["success", "confidence_score", "creativity_score", "sentiment", "xp_awarded", "ai_comment", "detected_objects"],
   };
 
   let specificInstruction = "";
@@ -358,20 +360,43 @@ export const verifyQuestSubmission = async (
   if (quest.type === 'collection') {
       specificInstruction = "Note: This is a collection quest. The user should show multiple items matching the description in the image.";
   }
+  if (quest.difficulty === Difficulty.HARD) {
+      specificInstruction += " STRICT MODE: This is a HARD quest. Require high evidence. If the image is vague, FAIL it.";
+  }
 
   const prompt = `
-    You are a Dungeon Master verifying a player's proof for the quest: "${quest.title}".
-    Quest Description: "${quest.description}".
-    Quest Type: ${quest.type}.
-    User Mission Report (Caption): "${userCaption || "No report provided."}"
+    You are a Dungeon Master verifying a player's real-life quest submission.
+    
+    QUEST DETAILS:
+    - Title: "${quest.title}"
+    - Description: "${quest.description}"
+    - Type: ${quest.type}
+    - Base XP Reward: ${quest.xpReward}
+    
+    SUBMISSION:
+    - Image: Provided.
+    - User Caption (Mission Report): "${userCaption || "No report provided."}"
+    
     ${specificInstruction}
     
-    Tasks:
-    1. VISUAL CHECK: Does the image reasonably satisfy the quest? Assign a confidence score (0-100).
-    2. SENTIMENT ANALYSIS: Analyze the user's caption (if any) and visual vibe. Are they roleplaying? Tired? Excited?
-    3. VERDICT: If confidence < 60, fail the quest.
-    4. COMMENTARY: Write a witty RPG response referencing their caption AND the image.
-    5. LOOT: Generate an item based on the image contents.
+    VERIFICATION TASKS:
+    1. **Object Detection**: List 3-5 main objects visible in the image.
+    2. **Relevance Check**: Does the image prove the user performed the specific action in the quest? (Confidence Score 0-100).
+       - If it's a generic selfie with no context relevant to the quest, score low.
+       - If it's a screenshot of a screen, score 0 and Fail (unless the quest asks for digital work).
+    3. **Effort & Creativity**: Rate the composition, lighting, or humor (Creativity Score 0-100).
+    4. **Sentiment**: Analyze the user's caption and facial expression/vibe.
+    5. **XP Calculation**: 
+       - If Success: Base XP + (Creativity Score * 0.5).
+       - If Fail: 0 XP.
+    6. **Loot Generation**: If successful, grant an item related to the *detected objects*.
+    7. **DM Commentary**: 
+       - If Success: Congratulate them on specific details seen in the photo.
+       - If Fail: Mock them gently or give a hint on what was missing.
+    
+    VERDICT RULES:
+    - Confidence < 60 => Success: false.
+    - Confidence >= 60 => Success: true.
 
     Return JSON.
   `;
@@ -398,9 +423,11 @@ export const verifyQuestSubmission = async (
     return {
       success: result.success ?? false,
       confidenceScore: result.confidence_score ?? 50,
+      creativityScore: result.creativity_score ?? 0,
       sentiment: result.sentiment || "Neutral",
       xpAwarded: result.xp_awarded ?? 0,
       aiComment: result.ai_comment ?? "The mists of uncertainty cloud my vision...",
+      detectedObjects: result.detected_objects || [],
       loot: result.success ? {
         name: result.loot_name || "Unknown Artifact",
         description: result.loot_description || "An item shrouded in mystery.",

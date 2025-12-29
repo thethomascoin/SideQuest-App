@@ -1,9 +1,8 @@
-declare const process: {
-  env: {
+declare namespace NodeJS {
+  interface ProcessEnv {
     API_KEY: string;
-    [key: string]: string | undefined;
   }
-};
+}
 
 declare module '*.svg' {
   const content: string;

@@ -14,6 +14,7 @@ export enum Difficulty {
 }
 
 export type DopamineCategory = 'Appetizer' | 'Main' | 'Side' | 'Dessert';
+export type NarrativeMode = 'Cyberpunk' | 'High Fantasy' | 'Modern Thriller' | 'Cozy Solarpunk';
 
 export interface Quest {
   id: string;
@@ -70,6 +71,7 @@ export interface LoreEntry {
 
 export interface UserProfile {
   id: string;
+  email?: string; // New field for auth simulation
   name: string;
   avatar: string; // Emoji or URL
   avatarColor: string; // bg color
@@ -87,6 +89,9 @@ export interface UserProfile {
   abilityCooldown: number | null; // Timestamp when ability is ready
   loreUnlocked: LoreEntry[]; // New field for lore
   dailyNarrative?: string; // For Main Character Energy
+  hasOnboarded: boolean; // New field to track walkthrough status
+  narrativeMode: NarrativeMode; // Preference for AI narration style
+  dopaminePreference: string; // Preference for rewards
 }
 
 export interface VerificationResult {
@@ -96,6 +101,8 @@ export interface VerificationResult {
   confidenceScore: number; // 0-100
   sentiment: string; // e.g., "Determined", "Happy", "Tired"
   loot?: Omit<LootItem, 'id' | 'image' | 'dateEarned'>; // AI generates metadata
+  creativityScore?: number; // New
+  detectedObjects?: string[]; // New
 }
 
 export interface SocialPost {
@@ -126,4 +133,4 @@ export interface NPCMessage {
   text: string;
 }
 
-export type ViewState = 'dashboard' | 'active-quest' | 'result' | 'profile' | 'inventory' | 'oracle' | 'tavern' | 'map' | 'achievements' | 'lore';
+export type ViewState = 'dashboard' | 'active-quest' | 'result' | 'profile' | 'inventory' | 'oracle' | 'tavern' | 'map' | 'achievements' | 'lore' | 'settings';
