@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Difficulty, PlayerClass, Quest, VerificationResult, SocialPost, LeaderboardEntry, LoreCategory, LoreEntry, UserProfile } from "../types";
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAI = () => new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY
 
 // Using gemini-3-flash-preview as it is the current standard for Text and Multimodal tasks
 const MODEL_NAME = "gemini-3-flash-preview";
