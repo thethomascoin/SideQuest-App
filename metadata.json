@@ -1,0 +1,7 @@
+{
+  "name": "Sidequest",
+  "description": "A real-life RPG that turns your daily life into a video game with AI-generated quests and vision-based verification.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
